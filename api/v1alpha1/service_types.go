@@ -16,7 +16,10 @@ limitations under the License.
 
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 // ServiceSpec defines the desired state of Service.
 type ServiceSpec struct {
@@ -28,6 +31,13 @@ type ServiceSpec struct {
 	// +required
 	// +listType=atomic
 	Ports []ServicePort `json:"ports"`
+
+	// env describes plain Kubernetes container environment variables.
+	// Secret values are managed through the Service env Secret maintained by the controller.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Env []corev1.EnvVar `json:"env,omitempty"`
 }
 
 // ServicePort describes one exposed Service port.
@@ -54,6 +64,10 @@ type ServiceStatus struct {
 	// latestDeploymentName is the newest Kudeploy Deployment created for this Service.
 	// +optional
 	LatestDeploymentName string `json:"latestDeploymentName,omitempty"`
+
+	// latestEnvSecretHash is the data hash of the Service env Secret used for the latest Deployment.
+	// +optional
+	LatestEnvSecretHash string `json:"latestEnvSecretHash,omitempty"`
 
 	// serviceAccountName is the runtime ServiceAccount used by this Service's Deployments.
 	// +optional

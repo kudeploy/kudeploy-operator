@@ -16,7 +16,10 @@ limitations under the License.
 
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 // DeploymentSpec defines the desired state of Deployment.
 type DeploymentSpec struct {
@@ -40,6 +43,12 @@ type DeploymentSpec struct {
 	// +required
 	// +listType=atomic
 	Ports []ServicePort `json:"ports"`
+
+	// env describes plain Kubernetes container environment variables captured for this Deployment version.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Env []corev1.EnvVar `json:"env,omitempty"`
 }
 
 // DeploymentStatus defines the observed state of Deployment.

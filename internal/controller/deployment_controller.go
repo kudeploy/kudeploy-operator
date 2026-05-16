@@ -47,6 +47,7 @@ type DeploymentReconciler struct {
 // +kubebuilder:rbac:groups=kudeploy.com,resources=deployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kudeploy.com,resources=deployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 
 // Reconcile moves a Kudeploy Deployment toward one matching Kubernetes Deployment.
 func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -75,6 +76,10 @@ func (r *DeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Get(ctx, req.NamespacedName, deployment); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	if err := r.createOrUpdateDeploymentEnvSecret(ctx, deployment); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	kubernetesDeployment := buildKubernetesDeployment(deployment)
@@ -136,6 +141,64 @@ func (r *DeploymentReconciler) createOrUpdateKubernetesDeployment(ctx context.Co
 		return err
 	}
 	return nil
+}
+
+func (r *DeploymentReconciler) createOrUpdateDeploymentEnvSecret(ctx context.Context, deployment *kudeployv1alpha1.Deployment) error {
+	desired, err := r.deploymentEnvSecret(ctx, deployment)
+	if err != nil {
+		if namespaceIsTerminatingError(err) {
+			return nil
+		}
+		return err
+	}
+	if err := controllerutil.SetControllerReference(deployment, desired, r.Scheme); err != nil {
+		return err
+	}
+
+	current := &corev1.Secret{}
+	err = r.Get(ctx, client.ObjectKeyFromObject(desired), current)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		if namespaceIsTerminatingError(err) {
+			return nil
+		}
+		return err
+	}
+
+	original := current.DeepCopy()
+	current.Labels = mergeManagedLabels(desired.Labels, current.Labels)
+	current.Annotations = mergeMetadata(desired.Annotations, current.Annotations)
+	current.OwnerReferences = desired.OwnerReferences
+	if current.Type == "" {
+		current.Type = desired.Type
+	}
+	if err := r.Patch(ctx, current, client.MergeFrom(original)); err != nil && !namespaceIsTerminatingError(err) {
+		return err
+	}
+	return nil
+}
+
+func (r *DeploymentReconciler) deploymentEnvSecret(ctx context.Context, deployment *kudeployv1alpha1.Deployment) (*corev1.Secret, error) {
+	source := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Name: serviceEnvSecretNameFor(deployment.Spec.ServiceName), Namespace: deployment.Namespace}, source); err != nil {
+		return nil, err
+	}
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        deploymentEnvSecretNameFor(deployment.Name),
+			Namespace:   deployment.Namespace,
+			Labels:      deploymentManagedLabels(deployment.Namespace, deployment.Spec.ServiceName, deployment.Name),
+			Annotations: copyStringMap(source.Annotations),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: copySecretData(source.Data),
+	}, nil
 }
 
 func (r *DeploymentReconciler) updateDeploymentStatus(ctx context.Context, deployment *kudeployv1alpha1.Deployment, kubernetesDeployment *appsv1.Deployment) error {
@@ -208,7 +271,17 @@ func buildKubernetesDeployment(deployment *kudeployv1alpha1.Deployment) *appsv1.
 							Name:            deployment.Spec.ServiceName,
 							Image:           deployment.Spec.Image,
 							ImagePullPolicy: corev1.PullAlways,
-							Ports:           containerPortsFor(deployment.Spec.Ports),
+							Env:             deployment.Spec.Env,
+							EnvFrom: []corev1.EnvFromSource{
+								{
+									SecretRef: &corev1.SecretEnvSource{
+										LocalObjectReference: corev1.LocalObjectReference{
+											Name: deploymentEnvSecretNameFor(deployment.Name),
+										},
+									},
+								},
+							},
+							Ports: containerPortsFor(deployment.Spec.Ports),
 						},
 					},
 				},
@@ -271,6 +344,7 @@ func (r *DeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kudeployv1alpha1.Deployment{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Secret{}).
 		Named("deployment").
 		Complete(r)
 }

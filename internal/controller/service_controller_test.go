@@ -72,6 +72,9 @@ var _ = Describe("Service Controller", func() {
 			},
 			Spec: kudeployv1alpha1.ServiceSpec{
 				Image: "ghcr.io/kudeploy/whoami:latest",
+				Env: []corev1.EnvVar{
+					{Name: "LOG_LEVEL", Value: "debug"},
+				},
 				Ports: []kudeployv1alpha1.ServicePort{
 					{Port: 80, TargetPort: 8080},
 				},
@@ -96,7 +99,16 @@ var _ = Describe("Service Controller", func() {
 		Expect(kudeployDeployment.Spec.Version).To(Equal(int64(1)))
 		Expect(kudeployDeployment.Spec.ServiceAccountName).To(Equal("service-whoami"))
 		Expect(kudeployDeployment.Spec.Image).To(Equal("ghcr.io/kudeploy/whoami:latest"))
+		Expect(kudeployDeployment.Spec.Env).To(ConsistOf(corev1.EnvVar{Name: "LOG_LEVEL", Value: "debug"}))
 		Expect(kudeployDeployment.Spec.Ports).To(ConsistOf(kudeployv1alpha1.ServicePort{Port: 80, TargetPort: 8080}))
+
+		serviceEnvSecret := &corev1.Secret{}
+		Expect(reconciler.Get(ctx, types.NamespacedName{Name: "service-whoami-env", Namespace: namespaceName}, serviceEnvSecret)).To(Succeed())
+		Expect(serviceEnvSecret.Labels).To(HaveKeyWithValue("kudeploy.com/project", namespaceName))
+		Expect(serviceEnvSecret.Labels).To(HaveKeyWithValue("kudeploy.com/service", serviceName))
+		Expect(serviceEnvSecret.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "kudeploy"))
+		Expect(serviceEnvSecret.OwnerReferences).To(HaveLen(1))
+		Expect(serviceEnvSecret.OwnerReferences[0].Name).To(Equal(serviceName))
 
 		kubernetesService := &corev1.Service{}
 		Expect(reconciler.Get(ctx, serviceKey, kubernetesService)).To(Succeed())
@@ -122,6 +134,7 @@ var _ = Describe("Service Controller", func() {
 		Expect(service.Status.ObservedGeneration).To(Equal(int64(1)))
 		Expect(service.Status.LatestVersion).To(Equal(int64(1)))
 		Expect(service.Status.LatestDeploymentName).To(Equal(firstDeploymentName))
+		Expect(service.Status.LatestEnvSecretHash).NotTo(BeEmpty())
 		Expect(service.Status.ServiceAccountName).To(Equal("service-whoami"))
 		Expect(service.Status.ActiveVersion).To(Equal(int64(0)))
 		Expect(service.Status.ActiveDeploymentName).To(BeEmpty())
@@ -141,6 +154,7 @@ var _ = Describe("Service Controller", func() {
 		service.Status.ObservedGeneration = 1
 		service.Status.LatestVersion = 1
 		service.Status.LatestDeploymentName = firstDeploymentName
+		service.Status.LatestEnvSecretHash = envSecretHash(nil)
 
 		kudeployDeployment := &kudeployv1alpha1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -196,6 +210,7 @@ var _ = Describe("Service Controller", func() {
 		service.Status.ObservedGeneration = 1
 		service.Status.LatestVersion = 1
 		service.Status.LatestDeploymentName = firstDeploymentName
+		service.Status.LatestEnvSecretHash = envSecretHash(nil)
 
 		kudeployDeployment := &kudeployv1alpha1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -254,6 +269,7 @@ var _ = Describe("Service Controller", func() {
 		service.Status.ObservedGeneration = 1
 		service.Status.LatestVersion = 1
 		service.Status.LatestDeploymentName = firstDeploymentName
+		service.Status.LatestEnvSecretHash = envSecretHash(nil)
 		service.Status.ActiveVersion = 1
 		service.Status.ActiveDeploymentName = firstDeploymentName
 		service.Spec.Image = "ghcr.io/kudeploy/whoami:v2"
@@ -280,6 +296,48 @@ var _ = Describe("Service Controller", func() {
 		Expect(service.Status.ObservedGeneration).To(Equal(int64(2)))
 		Expect(service.Status.LatestVersion).To(Equal(int64(2)))
 		Expect(service.Status.LatestDeploymentName).To(Equal("whoami-00002"))
+		Expect(service.Status.ActiveVersion).To(Equal(int64(1)))
+		Expect(service.Status.ActiveDeploymentName).To(Equal(firstDeploymentName))
+	})
+
+	It("creates a new version when the Service env Secret data changes", func() {
+		service := newService()
+		service.Labels = map[string]string{
+			projectLabel:   namespaceName,
+			managedByLabel: managedByLabelValue,
+		}
+		service.Status.ObservedGeneration = 1
+		service.Status.LatestVersion = 1
+		service.Status.LatestDeploymentName = firstDeploymentName
+		service.Status.LatestEnvSecretHash = envSecretHash(map[string][]byte{"TOKEN": []byte("old")})
+		service.Status.ActiveVersion = 1
+		service.Status.ActiveDeploymentName = firstDeploymentName
+
+		serviceEnvSecret := serviceEnvSecret(service)
+		serviceEnvSecret.Data = map[string][]byte{"TOKEN": []byte("new")}
+		kubernetesService := stableKubernetesService(service, map[string]string{
+			deploymentLabel: firstDeploymentName,
+		})
+		reconciler := newReconciler(service, serviceEnvSecret, kubernetesService)
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: serviceKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		newDeployment := &kudeployv1alpha1.Deployment{}
+		Expect(reconciler.Get(ctx, types.NamespacedName{Name: "whoami-00002", Namespace: namespaceName}, newDeployment)).To(Succeed())
+		Expect(newDeployment.Spec.Version).To(Equal(int64(2)))
+		Expect(newDeployment.Spec.Env).To(ConsistOf(corev1.EnvVar{Name: "LOG_LEVEL", Value: "debug"}))
+
+		Expect(reconciler.Get(ctx, serviceKey, kubernetesService)).To(Succeed())
+		Expect(kubernetesService.Spec.Selector).To(Equal(map[string]string{
+			deploymentLabel: firstDeploymentName,
+		}))
+
+		Expect(reconciler.Get(ctx, serviceKey, service)).To(Succeed())
+		Expect(service.Status.ObservedGeneration).To(Equal(int64(1)))
+		Expect(service.Status.LatestVersion).To(Equal(int64(2)))
+		Expect(service.Status.LatestDeploymentName).To(Equal("whoami-00002"))
+		Expect(service.Status.LatestEnvSecretHash).To(Equal(envSecretHash(map[string][]byte{"TOKEN": []byte("new")})))
 		Expect(service.Status.ActiveVersion).To(Equal(int64(1)))
 		Expect(service.Status.ActiveDeploymentName).To(Equal(firstDeploymentName))
 	})

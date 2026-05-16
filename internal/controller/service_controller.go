@@ -56,6 +56,7 @@ type ServiceReconciler struct {
 // +kubebuilder:rbac:groups=kudeploy.com,resources=services/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kudeploy.com,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 
 // Reconcile moves the Service toward its desired active Deployment version.
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -83,14 +84,20 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	if service.Status.ObservedGeneration != service.Generation {
-		return r.reconcileNewServiceVersion(ctx, service)
+	envSecret, err := r.createOrUpdateServiceEnvSecret(ctx, service)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	envHash := envSecretHash(envSecret.Data)
+
+	if service.Status.ObservedGeneration != service.Generation || service.Status.LatestEnvSecretHash != envHash {
+		return r.reconcileNewServiceVersion(ctx, service, envHash)
 	}
 
 	return r.reconcileServiceTraffic(ctx, service)
 }
 
-func (r *ServiceReconciler) reconcileNewServiceVersion(ctx context.Context, service *kudeployv1alpha1.Service) (ctrl.Result, error) {
+func (r *ServiceReconciler) reconcileNewServiceVersion(ctx context.Context, service *kudeployv1alpha1.Service, envHash string) (ctrl.Result, error) {
 	version := service.Status.LatestVersion + 1
 	if version == 0 {
 		version = 1
@@ -116,6 +123,7 @@ func (r *ServiceReconciler) reconcileNewServiceVersion(ctx context.Context, serv
 	service.Status.ObservedGeneration = service.Generation
 	service.Status.LatestVersion = version
 	service.Status.LatestDeploymentName = deploymentName
+	service.Status.LatestEnvSecretHash = envHash
 	service.Status.ServiceAccountName = runtimeServiceAccountNameFor(service.Name)
 	meta.SetStatusCondition(&service.Status.Conditions, metav1.Condition{
 		Type:    serviceReadyCondition,
@@ -124,6 +132,39 @@ func (r *ServiceReconciler) reconcileNewServiceVersion(ctx context.Context, serv
 		Message: "Latest Deployment is not ready yet.",
 	})
 	return ctrl.Result{}, r.patchServiceStatus(ctx, service, original)
+}
+
+func (r *ServiceReconciler) createOrUpdateServiceEnvSecret(ctx context.Context, service *kudeployv1alpha1.Service) (*corev1.Secret, error) {
+	desired := serviceEnvSecret(service)
+	if err := controllerutil.SetControllerReference(service, desired, r.Scheme); err != nil {
+		return nil, err
+	}
+
+	current := &corev1.Secret{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
+			return nil, err
+		}
+		return desired, nil
+	}
+	if err != nil {
+		if namespaceIsTerminatingError(err) {
+			return desired, nil
+		}
+		return nil, err
+	}
+	original := current.DeepCopy()
+	current.Labels = mergeManagedLabels(desired.Labels, current.Labels)
+	current.Annotations = mergeMetadata(desired.Annotations, current.Annotations)
+	current.OwnerReferences = desired.OwnerReferences
+	if current.Type == "" {
+		current.Type = desired.Type
+	}
+	if err := r.Patch(ctx, current, client.MergeFrom(original)); err != nil && !namespaceIsTerminatingError(err) {
+		return nil, err
+	}
+	return current, nil
 }
 
 func (r *ServiceReconciler) reconcileServiceTraffic(ctx context.Context, service *kudeployv1alpha1.Service) (ctrl.Result, error) {
@@ -294,7 +335,23 @@ func buildKudeployDeployment(service *kudeployv1alpha1.Service, version int64, n
 			ServiceAccountName: runtimeServiceAccountNameFor(service.Name),
 			Image:              service.Spec.Image,
 			Ports:              service.Spec.Ports,
+			Env:                service.Spec.Env,
 		},
+	}
+}
+
+func serviceEnvSecret(service *kudeployv1alpha1.Service) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      serviceEnvSecretNameFor(service.Name),
+			Namespace: service.Namespace,
+			Labels: map[string]string{
+				projectLabel:   service.Namespace,
+				serviceLabel:   service.Name,
+				managedByLabel: managedByLabelValue,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
 	}
 }
 
@@ -399,6 +456,7 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&kudeployv1alpha1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.Secret{}).
 		Named("service").
 		Complete(r)
 }

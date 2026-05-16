@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -337,15 +338,14 @@ spec: {}
 			)
 			expectKubernetesServiceSelector("whoami-00001")
 			expectDeploymentImageAndPolicy("whoami-00001", serviceE2EFirstImage)
+			expectDeploymentEnv("whoami-00001", "LOG_LEVEL", "e2e")
+			expectDeploymentEnvSecret("whoami-00001", "whoami-00001-env")
 			expectHTTPResponseFromService("whoami-first", "Hostname:")
 
-			By("updating the Service image to create a second version")
-			applyManifest("kudeploy-service-update", serviceManifest(serviceE2ESecondImage))
+			By("updating the Service env Secret to create a second version")
+			patchSecretData(serviceE2EProjectName, "service-whoami-env", "API_TOKEN", "one")
 
-			By("verifying traffic stays on the previous version while the new version starts")
-			expectKubernetesServiceSelector("whoami-00001")
-
-			By("waiting for the second Kudeploy Deployment to become active")
+			By("waiting for the second Kudeploy Deployment from env Secret change to become active")
 			waitForJSONPath(
 				"deployments.kudeploy.com", "whoami-00002", serviceE2EProjectName,
 				"{.status.conditions[?(@.type=='Ready')].status}", "True",
@@ -357,7 +357,31 @@ spec: {}
 				2*time.Minute,
 			)
 			expectKubernetesServiceSelector("whoami-00002")
-			expectDeploymentImageAndPolicy("whoami-00002", serviceE2ESecondImage)
+			expectDeploymentEnvSecret("whoami-00002", "whoami-00002-env")
+			expectSecretData(serviceE2EProjectName, "whoami-00002-env", "API_TOKEN", "one")
+
+			By("updating the Service image to create a second version")
+			applyManifest("kudeploy-service-update", serviceManifest(serviceE2ESecondImage))
+
+			By("verifying traffic stays on the previous version while the new version starts")
+			expectKubernetesServiceSelector("whoami-00002")
+
+			By("waiting for the third Kudeploy Deployment to become active")
+			waitForJSONPath(
+				"deployments.kudeploy.com", "whoami-00003", serviceE2EProjectName,
+				"{.status.conditions[?(@.type=='Ready')].status}", "True",
+				5*time.Minute,
+			)
+			waitForJSONPath(
+				"services.kudeploy.com", serviceE2EName, serviceE2EProjectName,
+				"{.status.activeDeploymentName}", "whoami-00003",
+				2*time.Minute,
+			)
+			expectKubernetesServiceSelector("whoami-00003")
+			expectDeploymentImageAndPolicy("whoami-00003", serviceE2ESecondImage)
+			expectDeploymentEnv("whoami-00003", "LOG_LEVEL", "e2e")
+			expectDeploymentEnvSecret("whoami-00003", "whoami-00003-env")
+			expectSecretData(serviceE2EProjectName, "whoami-00003-env", "API_TOKEN", "one")
 			expectHTTPResponseFromService("whoami-second", "Hostname:")
 		})
 
@@ -502,6 +526,9 @@ metadata:
   namespace: %s
 spec:
   image: %s
+  env:
+    - name: LOG_LEVEL
+      value: e2e
   ports:
     - port: 80
       targetPort: 80
@@ -564,6 +591,50 @@ func expectDeploymentImageAndPolicy(deploymentName, image string) {
 	output, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal("Always"))
+}
+
+func expectDeploymentEnv(deploymentName, envName, expectedValue string) {
+	cmd := exec.Command("kubectl", "get", "deployment", deploymentName,
+		"-n", serviceE2EProjectName,
+		"-o", fmt.Sprintf("jsonpath={.spec.template.spec.containers[0].env[?(@.name=='%s')].value}", envName),
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(expectedValue))
+}
+
+func expectDeploymentEnvSecret(deploymentName, secretName string) {
+	cmd := exec.Command("kubectl", "get", "deployment", deploymentName,
+		"-n", serviceE2EProjectName,
+		"-o", "jsonpath={.spec.template.spec.containers[0].envFrom[0].secretRef.name}",
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(secretName))
+}
+
+func patchSecretData(namespaceName, secretName, key, value string) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(value))
+	patch := fmt.Sprintf(`{"data":{"%s":"%s"}}`, key, encoded)
+	cmd := exec.Command("kubectl", "patch", "secret", secretName,
+		"-n", namespaceName,
+		"--type", "merge",
+		"-p", patch,
+	)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func expectSecretData(namespaceName, secretName, key, expectedValue string) {
+	cmd := exec.Command("kubectl", "get", "secret", secretName,
+		"-n", namespaceName,
+		"-o", fmt.Sprintf("jsonpath={.data.%s}", key),
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	decoded, err := base64.StdEncoding.DecodeString(output)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(string(decoded)).To(Equal(expectedValue))
 }
 
 func expectHTTPResponseFromService(podName, expectedSubstring string) {

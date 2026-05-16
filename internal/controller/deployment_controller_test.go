@@ -58,6 +58,15 @@ var _ = Describe("Deployment Controller", func() {
 			&corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
 			},
+			&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "service-whoami-env",
+					Namespace: namespaceName,
+				},
+				Data: map[string][]byte{
+					"TOKEN": []byte("secret"),
+				},
+			},
 		}, objects...)
 		return &DeploymentReconciler{
 			Client: fake.NewClientBuilder().
@@ -80,6 +89,9 @@ var _ = Describe("Deployment Controller", func() {
 				Version:            1,
 				ServiceAccountName: "service-whoami",
 				Image:              "ghcr.io/kudeploy/whoami:latest",
+				Env: []corev1.EnvVar{
+					{Name: "LOG_LEVEL", Value: "debug"},
+				},
 				Ports: []kudeployv1alpha1.ServicePort{
 					{Port: 80, TargetPort: 8080},
 				},
@@ -117,9 +129,25 @@ var _ = Describe("Deployment Controller", func() {
 		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Name).To(Equal(serviceName))
 		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/kudeploy/whoami:latest"))
 		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].ImagePullPolicy).To(Equal(corev1.PullAlways))
+		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Env).To(ConsistOf(corev1.EnvVar{Name: "LOG_LEVEL", Value: "debug"}))
+		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].EnvFrom).To(ConsistOf(corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "whoami-00001-env"},
+			},
+		}))
 		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Ports).To(ConsistOf(corev1.ContainerPort{ContainerPort: 8080}))
 		Expect(kubernetesDeployment.OwnerReferences).To(HaveLen(1))
 		Expect(kubernetesDeployment.OwnerReferences[0].Name).To(Equal(deploymentName))
+
+		envSecret := &corev1.Secret{}
+		Expect(reconciler.Get(ctx, types.NamespacedName{Name: "whoami-00001-env", Namespace: namespaceName}, envSecret)).To(Succeed())
+		Expect(envSecret.Data).To(Equal(map[string][]byte{"TOKEN": []byte("secret")}))
+		Expect(envSecret.Labels).To(HaveKeyWithValue("kudeploy.com/project", namespaceName))
+		Expect(envSecret.Labels).To(HaveKeyWithValue("kudeploy.com/service", serviceName))
+		Expect(envSecret.Labels).To(HaveKeyWithValue("kudeploy.com/deployment", deploymentName))
+		Expect(envSecret.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "kudeploy"))
+		Expect(envSecret.OwnerReferences).To(HaveLen(1))
+		Expect(envSecret.OwnerReferences[0].Name).To(Equal(deploymentName))
 
 		Expect(reconciler.Get(ctx, deploymentKey, deployment)).To(Succeed())
 		Expect(deployment.Labels).To(HaveKeyWithValue("kudeploy.com/project", namespaceName))
@@ -172,6 +200,25 @@ var _ = Describe("Deployment Controller", func() {
 		Expect(kubernetesDeployment.Spec.Template.Labels).To(HaveKeyWithValue(deploymentLabel, deploymentName))
 		Expect(kubernetesDeployment.Spec.Template.Annotations).To(HaveKeyWithValue("kubectl.kubernetes.io/restartedAt", "2026-05-16T00:00:00Z"))
 		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/kudeploy/whoami:v2"))
+	})
+
+	It("does not overwrite an existing env Secret clone", func() {
+		deployment := newDeployment()
+		clone := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "whoami-00001-env",
+				Namespace: namespaceName,
+			},
+			Data: map[string][]byte{"TOKEN": []byte("old")},
+		}
+		reconciler := newReconciler(deployment, clone)
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: deploymentKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		envSecret := &corev1.Secret{}
+		Expect(reconciler.Get(ctx, types.NamespacedName{Name: "whoami-00001-env", Namespace: namespaceName}, envSecret)).To(Succeed())
+		Expect(envSecret.Data).To(Equal(map[string][]byte{"TOKEN": []byte("old")}))
 	})
 
 	It("marks the Kudeploy Deployment ready when the Kubernetes Deployment is available", func() {

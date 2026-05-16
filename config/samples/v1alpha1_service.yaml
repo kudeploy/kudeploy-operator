@@ -5,6 +5,9 @@ metadata:
   namespace: whoami
 spec:
   image: ghcr.io/kudeploy/whoami:latest
+  env:
+    - name: LOG_LEVEL
+      value: info
   ports:
     - port: 80
       targetPort: 80
