@@ -8,7 +8,7 @@ spec:
     url: https://github.com/kudeploy/whoami
     revision: main
   image:
-    repository: registry.kudeploy.com/whoami/whoami
+    repository: ghcr.io/kudeploy/whoami
     tag: latest
     secretRef:
       name: image-credentials

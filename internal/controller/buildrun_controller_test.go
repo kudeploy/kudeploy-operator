@@ -79,7 +79,7 @@ var _ = Describe("BuildRun Controller", func() {
 					},
 				},
 				Image: kudeployv1alpha1.BuildRunImageSpec{
-					Repository: "registry.kudeploy.com/whoami/whoami",
+					Repository: "ghcr.io/kudeploy/whoami",
 					Tag:        "latest",
 					SecretRef: &corev1.LocalObjectReference{
 						Name: "image-credentials",
@@ -138,7 +138,7 @@ var _ = Describe("BuildRun Controller", func() {
 		Expect(pipelineRun.Spec.Params).To(ConsistOf(
 			tektonStringParam("git-url", "https://github.com/kudeploy/whoami"),
 			tektonStringParam("git-revision", "main"),
-			tektonStringParam("image", "registry.kudeploy.com/whoami/whoami:latest"),
+			tektonStringParam("image", "ghcr.io/kudeploy/whoami:latest"),
 		))
 		Expect(pipelineRun.Spec.Workspaces).To(HaveLen(1))
 		Expect(pipelineRun.Spec.Workspaces[0].Name).To(Equal("source"))
