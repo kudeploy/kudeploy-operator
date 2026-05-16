@@ -30,6 +30,8 @@ import (
 const (
 	certmanagerVersion = "v1.20.2"
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
+	tektonVersion      = "v1.4.0"
+	tektonURLTmpl      = "https://storage.googleapis.com/tekton-releases/pipeline/previous/%s/release.yaml"
 
 	defaultKindBinary  = "kind"
 	defaultKindCluster = "kind"
@@ -123,6 +125,64 @@ func IsCertManagerCRDsInstalled() bool {
 	// Check if any of the Cert Manager CRDs are present
 	crdList := GetNonEmptyLines(output)
 	for _, crd := range certManagerCRDs {
+		for _, line := range crdList {
+			if strings.Contains(line, crd) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// InstallTektonPipeline installs the Tekton Pipeline release bundle.
+func InstallTektonPipeline() error {
+	url := fmt.Sprintf(tektonURLTmpl, tektonVersion)
+	cmd := exec.Command("kubectl", "apply", "-f", url)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+
+	for _, deployment := range []string{"tekton-pipelines-controller", "tekton-pipelines-webhook"} {
+		cmd = exec.Command("kubectl", "wait", "deployment.apps/"+deployment,
+			"--for", "condition=Available",
+			"--namespace", "tekton-pipelines",
+			"--timeout", "5m",
+		)
+		if _, err := Run(cmd); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// UninstallTektonPipeline uninstalls the Tekton Pipeline release bundle.
+func UninstallTektonPipeline() {
+	url := fmt.Sprintf(tektonURLTmpl, tektonVersion)
+	cmd := exec.Command("kubectl", "delete", "-f", url)
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+// IsTektonPipelineCRDsInstalled checks if the Tekton Pipeline CRDs are installed.
+func IsTektonPipelineCRDsInstalled() bool {
+	tektonCRDs := []string{
+		"pipelineruns.tekton.dev",
+		"pipelines.tekton.dev",
+		"taskruns.tekton.dev",
+		"tasks.tekton.dev",
+	}
+
+	cmd := exec.Command("kubectl", "get", "crds")
+	output, err := Run(cmd)
+	if err != nil {
+		return false
+	}
+
+	crdList := GetNonEmptyLines(output)
+	for _, crd := range tektonCRDs {
 		for _, line := range crdList {
 			if strings.Contains(line, crd) {
 				return true

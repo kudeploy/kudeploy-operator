@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -56,6 +57,15 @@ const serviceE2EFirstImage = "ghcr.io/kudeploy/whoami:latest"
 
 // serviceE2ESecondImage is the image used to trigger a second Service version.
 const serviceE2ESecondImage = "docker.io/traefik/whoami:v1.10.3"
+
+// buildRunE2EProjectName is the Project used by the BuildRun E2E.
+const buildRunE2EProjectName = "buildrun-e2e"
+
+// buildRunE2EName is the BuildRun used by the BuildRun E2E.
+const buildRunE2EName = "whoami-build"
+
+// buildRunE2EImage is the destination image used by the BuildRun E2E.
+const buildRunE2EImage = "example.com/kudeploy/whoami:e2e"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -351,6 +361,68 @@ spec: {}
 			expectHTTPResponseFromService("whoami-second", "Hostname:")
 		})
 
+		It("should create Tekton resources for BuildRun", func() {
+			By("cleaning up any stale BuildRun Project from previous interrupted runs")
+			cmd := exec.Command("kubectl", "delete", "project", buildRunE2EProjectName, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+
+			defer func() {
+				By("cleaning up the BuildRun E2E Project")
+				cmd := exec.Command("kubectl", "delete", "project", buildRunE2EProjectName, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			}()
+
+			By("creating a Kudeploy Project for BuildRun")
+			applyManifest("buildrun-project", fmt.Sprintf(`apiVersion: kudeploy.com/v1alpha1
+kind: Project
+metadata:
+  name: %s
+spec: {}
+`, buildRunE2EProjectName))
+
+			By("waiting for the BuildRun namespace to be ready")
+			waitForJSONPath(
+				"project", buildRunE2EProjectName, "",
+				"{.status.namespaceName}", buildRunE2EProjectName,
+				2*time.Minute,
+			)
+
+			By("creating a Kudeploy BuildRun")
+			applyManifest("kudeploy-buildrun", buildRunManifest())
+
+			By("waiting for the BuildRun controller to create Tekton resources")
+			waitForJSONPath(
+				"buildruns.kudeploy.com", buildRunE2EName, buildRunE2EProjectName,
+				"{.status.conditions[?(@.type=='Ready')].reason}", "PipelineRunCreated",
+				2*time.Minute,
+			)
+			waitForJSONPath(
+				"buildruns.kudeploy.com", buildRunE2EName, buildRunE2EProjectName,
+				"{.status.pipelineRunName}", buildRunE2EName,
+				2*time.Minute,
+			)
+			waitForJSONPath(
+				"buildruns.kudeploy.com", buildRunE2EName, buildRunE2EProjectName,
+				"{.status.serviceAccountName}", "buildrun-"+buildRunE2EName,
+				2*time.Minute,
+			)
+
+			By("verifying the generated BuildRun ServiceAccount")
+			expectServiceAccountLabel("buildrun-"+buildRunE2EName, "kudeploy.com/buildrun", buildRunE2EName)
+			expectServiceAccountLabel("buildrun-"+buildRunE2EName, "app.kubernetes.io/managed-by", "kudeploy")
+
+			By("verifying the generated Tekton PipelineRun")
+			expectPipelineRunLabel("kudeploy.com/buildrun", buildRunE2EName)
+			expectPipelineRunField("{.spec.pipelineRef.resolver}", "http")
+			expectPipelineRunField("{.spec.pipelineRef.params[?(@.name=='url')].value}", buildPipelineURL())
+			expectPipelineRunField("{.spec.taskRunTemplate.serviceAccountName}", "buildrun-"+buildRunE2EName)
+			expectPipelineRunField("{.spec.params[?(@.name=='git-url')].value}", "https://github.com/kudeploy/whoami")
+			expectPipelineRunField("{.spec.params[?(@.name=='image')].value}", buildRunE2EImage)
+			expectPipelineRunField("{.spec.params[?(@.name=='context')].value}", ".")
+			expectPipelineRunField("{.spec.params[?(@.name=='dockerfile')].value}", "./Dockerfile")
+			expectPipelineRunField("{.spec.workspaces[0].name}", "source")
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -436,6 +508,21 @@ spec:
 `, serviceE2EName, serviceE2EProjectName, image)
 }
 
+func buildRunManifest() string {
+	return fmt.Sprintf(`apiVersion: kudeploy.com/v1alpha1
+kind: BuildRun
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  git:
+    url: https://github.com/kudeploy/whoami
+  image:
+    repository: example.com/kudeploy/whoami
+    tag: e2e
+`, buildRunE2EName, buildRunE2EProjectName)
+}
+
 func waitForJSONPath(resource, name, resourceNamespace, jsonPath, expected string, timeout time.Duration) {
 	verify := func(g Gomega) {
 		args := []string{"get", resource, name}
@@ -500,6 +587,38 @@ func expectHTTPResponseFromService(podName, expectedSubstring string) {
 	output, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(ContainSubstring(expectedSubstring))
+}
+
+func expectServiceAccountLabel(serviceAccountName, labelKey, expectedValue string) {
+	cmd := exec.Command("kubectl", "get", "serviceaccount", serviceAccountName,
+		"-n", buildRunE2EProjectName,
+		"-o", fmt.Sprintf("jsonpath={.metadata.labels.%s}", escapedJSONPathKey(labelKey)),
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(expectedValue))
+}
+
+func expectPipelineRunLabel(labelKey, expectedValue string) {
+	expectPipelineRunField(fmt.Sprintf("{.metadata.labels.%s}", escapedJSONPathKey(labelKey)), expectedValue)
+}
+
+func expectPipelineRunField(jsonPath, expectedValue string) {
+	cmd := exec.Command("kubectl", "get", "pipelinerun", buildRunE2EName,
+		"-n", buildRunE2EProjectName,
+		"-o", fmt.Sprintf("jsonpath=%s", jsonPath),
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(expectedValue))
+}
+
+func escapedJSONPathKey(key string) string {
+	return strings.ReplaceAll(key, ".", "\\.")
+}
+
+func buildPipelineURL() string {
+	return "https://raw.githubusercontent.com/kudeploy/kudeploy-manifests/main/tekton/pipelines/build-and-push.yaml"
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,

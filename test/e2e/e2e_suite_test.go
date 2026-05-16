@@ -36,6 +36,8 @@ var (
 	managerImage = "example.com/kudeploy-controller:v0.0.1"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
+	// shouldCleanupTektonPipeline tracks whether Tekton Pipeline was installed by this suite.
+	shouldCleanupTektonPipeline = false
 )
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
@@ -64,9 +66,11 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	setupTektonPipeline()
 })
 
 var _ = AfterSuite(func() {
+	teardownTektonPipeline()
 	teardownCertManager()
 })
 
@@ -116,4 +120,34 @@ func teardownCertManager() {
 
 	By("uninstalling CertManager")
 	utils.UninstallCertManager()
+}
+
+// setupTektonPipeline installs Tekton Pipeline if needed for BuildRun tests.
+func setupTektonPipeline() {
+	if os.Getenv("TEKTON_PIPELINE_INSTALL_SKIP") == "true" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping Tekton Pipeline installation (TEKTON_PIPELINE_INSTALL_SKIP=true)\n")
+		return
+	}
+
+	By("checking if Tekton Pipeline is already installed")
+	if utils.IsTektonPipelineCRDsInstalled() {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Tekton Pipeline is already installed. Skipping installation.\n")
+		return
+	}
+
+	shouldCleanupTektonPipeline = true
+
+	By("installing Tekton Pipeline")
+	Expect(utils.InstallTektonPipeline()).To(Succeed(), "Failed to install Tekton Pipeline")
+}
+
+// teardownTektonPipeline uninstalls Tekton Pipeline if it was installed by setupTektonPipeline.
+func teardownTektonPipeline() {
+	if !shouldCleanupTektonPipeline {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping Tekton Pipeline cleanup (not installed by this suite)\n")
+		return
+	}
+
+	By("uninstalling Tekton Pipeline")
+	utils.UninstallTektonPipeline()
 }
