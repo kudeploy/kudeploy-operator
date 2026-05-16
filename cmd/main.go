@@ -37,8 +37,8 @@ import (
 
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 
-	kudeployv1alpha1 "github.com/kudeploy/kudeploy-operator/api/v1alpha1"
-	"github.com/kudeploy/kudeploy-operator/internal/controller"
+	kudeployv1alpha1 "github.com/kudeploy/kudeploy-controller/api/v1alpha1"
+	"github.com/kudeploy/kudeploy-controller/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kudeployv1alpha1 "github.com/kudeploy/kudeploy-operator/api/v1alpha1"
+	kudeployv1alpha1 "github.com/kudeploy/kudeploy-controller/api/v1alpha1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 )
 

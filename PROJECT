@@ -6,15 +6,15 @@ cliVersion: 4.14.0
 domain: kudeploy.com
 layout:
 - go.kubebuilder.io/v4
-projectName: kudeploy-operator
-repo: github.com/kudeploy/kudeploy-operator
+projectName: kudeploy-controller
+repo: github.com/kudeploy/kudeploy-controller
 resources:
 - api:
     crdVersion: v1
   controller: true
   domain: kudeploy.com
   kind: Project
-  path: github.com/kudeploy/kudeploy-operator/api/v1alpha1
+  path: github.com/kudeploy/kudeploy-controller/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -22,7 +22,7 @@ resources:
   controller: true
   domain: kudeploy.com
   kind: BuildRun
-  path: github.com/kudeploy/kudeploy-operator/api/v1alpha1
+  path: github.com/kudeploy/kudeploy-controller/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -30,7 +30,7 @@ resources:
   controller: true
   domain: kudeploy.com
   kind: Service
-  path: github.com/kudeploy/kudeploy-operator/api/v1alpha1
+  path: github.com/kudeploy/kudeploy-controller/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -38,6 +38,6 @@ resources:
   controller: true
   domain: kudeploy.com
   kind: Deployment
-  path: github.com/kudeploy/kudeploy-operator/api/v1alpha1
+  path: github.com/kudeploy/kudeploy-controller/api/v1alpha1
   version: v1alpha1
 version: "3"

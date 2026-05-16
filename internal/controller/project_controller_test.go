@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	kudeployv1alpha1 "github.com/kudeploy/kudeploy-operator/api/v1alpha1"
+	kudeployv1alpha1 "github.com/kudeploy/kudeploy-controller/api/v1alpha1"
 )
 
 var _ = Describe("Project Controller", func() {

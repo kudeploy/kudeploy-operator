@@ -1,4 +1,4 @@
-module github.com/kudeploy/kudeploy-operator
+module github.com/kudeploy/kudeploy-controller
 
 go 1.25.7
 

@@ -1,4 +1,4 @@
-# kudeploy-operator - AI Agent Guide
+# kudeploy-controller - AI Agent Guide
 
 ## Project Structure
 

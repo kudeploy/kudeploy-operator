@@ -33,8 +33,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	kudeploycomv1alpha1 "github.com/kudeploy/kudeploy-operator/api/v1alpha1"
-	kudeployv1alpha1 "github.com/kudeploy/kudeploy-operator/api/v1alpha1"
+	kudeploycomv1alpha1 "github.com/kudeploy/kudeploy-controller/api/v1alpha1"
+	kudeployv1alpha1 "github.com/kudeploy/kudeploy-controller/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
