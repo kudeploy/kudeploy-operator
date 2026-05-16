@@ -264,13 +264,7 @@ func buildPipelineRun(buildRun *kudeployv1alpha1.BuildRun) *tektonv1.PipelineRun
 					},
 				},
 			},
-			Params: tektonv1.Params{
-				tektonStringParam("git-url", buildRun.Spec.Repo.URL),
-				tektonStringParam("git-revision", buildRun.Spec.Repo.Revision),
-				tektonStringParam("image", fmt.Sprintf("%s:%s", buildRun.Spec.Image.Repository, buildRun.Spec.Image.Tag)),
-				tektonStringParam("context", buildContextFor(buildRun)),
-				tektonStringParam("dockerfile", dockerfileFor(buildRun)),
-			},
+			Params: buildPipelineRunParams(buildRun),
 			Workspaces: []tektonv1.WorkspaceBinding{
 				{
 					Name: sourceWorkspaceName,
@@ -296,6 +290,19 @@ func buildRunManagedLabels(buildRun *kudeployv1alpha1.BuildRun) map[string]strin
 		buildRunLabel:  buildRun.Name,
 		managedByLabel: managedByLabelValue,
 	}
+}
+
+func buildPipelineRunParams(buildRun *kudeployv1alpha1.BuildRun) tektonv1.Params {
+	params := tektonv1.Params{
+		tektonStringParam("git-url", buildRun.Spec.Repo.URL),
+		tektonStringParam("image", fmt.Sprintf("%s:%s", buildRun.Spec.Image.Repository, buildRun.Spec.Image.Tag)),
+		tektonStringParam("context", buildContextFor(buildRun)),
+		tektonStringParam("dockerfile", dockerfileFor(buildRun)),
+	}
+	if buildRun.Spec.Repo.Revision != "" {
+		params = append(params, tektonStringParam("git-revision", buildRun.Spec.Repo.Revision))
+	}
+	return params
 }
 
 func serviceAccountNameFor(buildRunName string) string {

@@ -52,8 +52,9 @@ type BuildRunRepoSpec struct {
 	URL string `json:"url"`
 
 	// revision is the Git revision to build, such as a branch, tag, or commit SHA.
-	// +required
-	Revision string `json:"revision"`
+	// When omitted, the Git repository's default branch is used.
+	// +optional
+	Revision string `json:"revision,omitempty"`
 
 	// secretRef references an optional Secret in the same namespace used for Git authentication.
 	// +optional

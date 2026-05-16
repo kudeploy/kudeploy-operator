@@ -8,7 +8,6 @@ spec:
   dockerfile: ./Dockerfile
   repo:
     url: https://github.com/kudeploy/whoami
-    revision: main
   image:
     repository: ghcr.io/kudeploy/whoami
     tag: latest

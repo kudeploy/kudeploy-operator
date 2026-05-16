@@ -81,8 +81,9 @@ spec:
                 description: repo describes the Git repository to build.
                 properties:
                   revision:
-                    description: revision is the Git revision to build, such as a
-                      branch, tag, or commit SHA.
+                    description: |-
+                      revision is the Git revision to build, such as a branch, tag, or commit SHA.
+                      When omitted, the Git repository's default branch is used.
                     type: string
                   secretRef:
                     description: secretRef references an optional Secret in the same
@@ -103,7 +104,6 @@ spec:
                     description: url is the Git repository URL.
                     type: string
                 required:
-                - revision
                 - url
                 type: object
             required:

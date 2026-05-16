@@ -74,8 +74,7 @@ var _ = Describe("BuildRun Controller", func() {
 				Context:    "services/whoami",
 				Dockerfile: "Dockerfile.prod",
 				Repo: kudeployv1alpha1.BuildRunRepoSpec{
-					URL:      "https://github.com/kudeploy/whoami",
-					Revision: "main",
+					URL: "https://github.com/kudeploy/whoami",
 					SecretRef: &corev1.LocalObjectReference{
 						Name: "repo-credentials",
 					},
@@ -139,7 +138,6 @@ var _ = Describe("BuildRun Controller", func() {
 		Expect(pipelineRun.Spec.TaskRunTemplate.PodTemplate.SecurityContext.FSGroup).To(Equal(ptrInt64(65532)))
 		Expect(pipelineRun.Spec.Params).To(ConsistOf(
 			tektonStringParam("git-url", "https://github.com/kudeploy/whoami"),
-			tektonStringParam("git-revision", "main"),
 			tektonStringParam("image", "ghcr.io/kudeploy/whoami:latest"),
 			tektonStringParam("context", "services/whoami"),
 			tektonStringParam("dockerfile", "Dockerfile.prod"),
