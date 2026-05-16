@@ -45,6 +45,18 @@ const metricsServiceName = "kudeploy-controller-controller-manager-metrics-servi
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "kudeploy-controller-metrics-binding"
 
+// serviceE2EProjectName is the Project used by the Kudeploy service E2E.
+const serviceE2EProjectName = "kudeploy-e2e"
+
+// serviceE2EName is the Service used by the Kudeploy service E2E.
+const serviceE2EName = "whoami"
+
+// serviceE2EFirstImage is the first image deployed by the Kudeploy service E2E.
+const serviceE2EFirstImage = "ghcr.io/kudeploy/whoami:latest"
+
+// serviceE2ESecondImage is the image used to trigger a second Service version.
+const serviceE2ESecondImage = "docker.io/traefik/whoami:v1.10.3"
+
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
@@ -268,6 +280,77 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
 
+		It("should reconcile Project and Service rolling updates", func() {
+			By("cleaning up any stale Project from previous interrupted runs")
+			cmd := exec.Command("kubectl", "delete", "project", serviceE2EProjectName, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+
+			defer func() {
+				By("cleaning up the Kudeploy E2E Project")
+				cmd := exec.Command("kubectl", "delete", "project", serviceE2EProjectName, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			}()
+
+			By("creating a Kudeploy Project")
+			applyManifest("kudeploy-project", fmt.Sprintf(`apiVersion: kudeploy.com/v1alpha1
+kind: Project
+metadata:
+  name: %s
+spec: {}
+`, serviceE2EProjectName))
+
+			By("waiting for the Project namespace to be ready")
+			waitForJSONPath(
+				"project", serviceE2EProjectName, "",
+				"{.status.namespaceName}", serviceE2EProjectName,
+				2*time.Minute,
+			)
+			cmd = exec.Command("kubectl", "get", "namespace", serviceE2EProjectName,
+				"-o", "jsonpath={.metadata.labels.kudeploy\\.com/project}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal(serviceE2EProjectName))
+
+			By("creating a Kudeploy Service")
+			applyManifest("kudeploy-service", serviceManifest(serviceE2EFirstImage))
+
+			By("waiting for the first Kudeploy Deployment to become active")
+			waitForJSONPath(
+				"deployments.kudeploy.com", "whoami-00001", serviceE2EProjectName,
+				"{.status.conditions[?(@.type=='Ready')].status}", "True",
+				5*time.Minute,
+			)
+			waitForJSONPath(
+				"services.kudeploy.com", serviceE2EName, serviceE2EProjectName,
+				"{.status.activeDeploymentName}", "whoami-00001",
+				2*time.Minute,
+			)
+			expectKubernetesServiceSelector("whoami-00001")
+			expectDeploymentImageAndPolicy("whoami-00001", serviceE2EFirstImage)
+			expectHTTPResponseFromService("whoami-first", "Hostname:")
+
+			By("updating the Service image to create a second version")
+			applyManifest("kudeploy-service-update", serviceManifest(serviceE2ESecondImage))
+
+			By("verifying traffic stays on the previous version while the new version starts")
+			expectKubernetesServiceSelector("whoami-00001")
+
+			By("waiting for the second Kudeploy Deployment to become active")
+			waitForJSONPath(
+				"deployments.kudeploy.com", "whoami-00002", serviceE2EProjectName,
+				"{.status.conditions[?(@.type=='Ready')].status}", "True",
+				5*time.Minute,
+			)
+			waitForJSONPath(
+				"services.kudeploy.com", serviceE2EName, serviceE2EProjectName,
+				"{.status.activeDeploymentName}", "whoami-00002",
+				2*time.Minute,
+			)
+			expectKubernetesServiceSelector("whoami-00002")
+			expectDeploymentImageAndPolicy("whoami-00002", serviceE2ESecondImage)
+			expectHTTPResponseFromService("whoami-second", "Hostname:")
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -328,6 +411,95 @@ func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
+}
+
+func applyManifest(name, manifest string) {
+	manifestFile := filepath.Join("/tmp", fmt.Sprintf("%s.yaml", name))
+	Expect(os.WriteFile(manifestFile, []byte(manifest), os.FileMode(0o644))).To(Succeed())
+
+	cmd := exec.Command("kubectl", "apply", "-f", manifestFile)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func serviceManifest(image string) string {
+	return fmt.Sprintf(`apiVersion: kudeploy.com/v1alpha1
+kind: Service
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  image: %s
+  ports:
+    - port: 80
+      targetPort: 80
+`, serviceE2EName, serviceE2EProjectName, image)
+}
+
+func waitForJSONPath(resource, name, resourceNamespace, jsonPath, expected string, timeout time.Duration) {
+	verify := func(g Gomega) {
+		args := []string{"get", resource, name}
+		if resourceNamespace != "" {
+			args = append(args, "-n", resourceNamespace)
+		}
+		args = append(args, "-o", fmt.Sprintf("jsonpath=%s", jsonPath))
+		cmd := exec.Command("kubectl", args...)
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal(expected))
+	}
+	Eventually(verify, timeout, time.Second).Should(Succeed())
+}
+
+func expectKubernetesServiceSelector(deploymentName string) {
+	cmd := exec.Command("kubectl", "get", "service", serviceE2EName,
+		"-n", serviceE2EProjectName,
+		"-o", "jsonpath={.spec.selector.kudeploy\\.com/deployment}",
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(deploymentName))
+}
+
+func expectDeploymentImageAndPolicy(deploymentName, image string) {
+	cmd := exec.Command("kubectl", "get", "deployment", deploymentName,
+		"-n", serviceE2EProjectName,
+		"-o", "jsonpath={.spec.template.spec.containers[0].image}",
+	)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal(image))
+
+	cmd = exec.Command("kubectl", "get", "deployment", deploymentName,
+		"-n", serviceE2EProjectName,
+		"-o", "jsonpath={.spec.template.spec.containers[0].imagePullPolicy}",
+	)
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal("Always"))
+}
+
+func expectHTTPResponseFromService(podName, expectedSubstring string) {
+	cmd := exec.Command("kubectl", "delete", "pod", podName,
+		"-n", serviceE2EProjectName, "--ignore-not-found")
+	_, _ = utils.Run(cmd)
+
+	cmd = exec.Command("kubectl", "run", podName,
+		"--restart=Never",
+		"--namespace", serviceE2EProjectName,
+		"--image=curlimages/curl:latest",
+		"--",
+		"curl", "-sS", fmt.Sprintf("http://%s.%s.svc.cluster.local", serviceE2EName, serviceE2EProjectName),
+	)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+
+	waitForJSONPath("pod", podName, serviceE2EProjectName, "{.status.phase}", "Succeeded", 3*time.Minute)
+
+	cmd = exec.Command("kubectl", "logs", podName, "-n", serviceE2EProjectName)
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(ContainSubstring(expectedSubstring))
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
