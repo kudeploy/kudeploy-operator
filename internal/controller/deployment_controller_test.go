@@ -101,6 +101,10 @@ var _ = Describe("Deployment Controller", func() {
 		Expect(kubernetesDeployment.Labels).To(HaveKeyWithValue("kudeploy.com/deployment", deploymentName))
 		Expect(kubernetesDeployment.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "kudeploy"))
 		Expect(kubernetesDeployment.Spec.Replicas).To(Equal(ptrInt32(1)))
+		Expect(kubernetesDeployment.Spec.RevisionHistoryLimit).To(Equal(ptrInt32(0)))
+		Expect(kubernetesDeployment.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
+		Expect(kubernetesDeployment.Spec.Strategy.RollingUpdate).NotTo(BeNil())
+		Expect(kubernetesDeployment.Spec.Strategy.RollingUpdate.MaxUnavailable.IntVal).To(Equal(int32(0)))
 		Expect(kubernetesDeployment.Spec.Selector.MatchLabels).To(Equal(map[string]string{
 			deploymentLabel: deploymentName,
 		}))
@@ -128,6 +132,46 @@ var _ = Describe("Deployment Controller", func() {
 			HaveField("Status", metav1.ConditionFalse),
 			HaveField("Reason", "KubernetesDeploymentProgressing"),
 		)))
+	})
+
+	It("preserves scale, selector, and external metadata on existing Kubernetes Deployments", func() {
+		deployment := newDeployment()
+		existing := buildKubernetesDeployment(deployment)
+		existing.Labels["team"] = "platform"
+		existing.Annotations = map[string]string{
+			"kubectl.kubernetes.io/restartedAt": "2026-05-16T00:00:00Z",
+		}
+		existing.Spec.Replicas = ptrInt32(3)
+		existing.Spec.Selector.MatchLabels = map[string]string{
+			"existing-selector": "kept",
+		}
+		existing.Spec.Template.Labels = map[string]string{
+			deploymentLabel:           deploymentName,
+			"sidecar.istio.io/inject": "true",
+		}
+		existing.Spec.Template.Annotations = map[string]string{
+			"kubectl.kubernetes.io/restartedAt": "2026-05-16T00:00:00Z",
+		}
+
+		deployment.Spec.Image = "ghcr.io/kudeploy/whoami:v2"
+		reconciler := newReconciler(deployment, existing)
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: deploymentKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		kubernetesDeployment := &appsv1.Deployment{}
+		Expect(reconciler.Get(ctx, deploymentKey, kubernetesDeployment)).To(Succeed())
+		Expect(kubernetesDeployment.Labels).To(HaveKeyWithValue("team", "platform"))
+		Expect(kubernetesDeployment.Labels).To(HaveKeyWithValue(deploymentLabel, deploymentName))
+		Expect(kubernetesDeployment.Annotations).To(HaveKeyWithValue("kubectl.kubernetes.io/restartedAt", "2026-05-16T00:00:00Z"))
+		Expect(kubernetesDeployment.Spec.Replicas).To(Equal(ptrInt32(3)))
+		Expect(kubernetesDeployment.Spec.Selector.MatchLabels).To(Equal(map[string]string{
+			"existing-selector": "kept",
+		}))
+		Expect(kubernetesDeployment.Spec.Template.Labels).To(HaveKeyWithValue("sidecar.istio.io/inject", "true"))
+		Expect(kubernetesDeployment.Spec.Template.Labels).To(HaveKeyWithValue(deploymentLabel, deploymentName))
+		Expect(kubernetesDeployment.Spec.Template.Annotations).To(HaveKeyWithValue("kubectl.kubernetes.io/restartedAt", "2026-05-16T00:00:00Z"))
+		Expect(kubernetesDeployment.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/kudeploy/whoami:v2"))
 	})
 
 	It("marks the Kudeploy Deployment ready when the Kubernetes Deployment is available", func() {

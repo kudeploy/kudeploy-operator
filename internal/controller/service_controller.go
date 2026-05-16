@@ -195,7 +195,7 @@ func (r *ServiceReconciler) createOrUpdateRuntimeServiceAccount(ctx context.Cont
 	current := &corev1.ServiceAccount{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil && !namespaceIsTerminatingError(err) {
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
 			return err
 		}
 		return nil
@@ -207,7 +207,8 @@ func (r *ServiceReconciler) createOrUpdateRuntimeServiceAccount(ctx context.Cont
 		return err
 	}
 	original := current.DeepCopy()
-	current.Labels = desired.Labels
+	current.Labels = mergeManagedLabels(desired.Labels, current.Labels)
+	current.Annotations = mergeMetadata(desired.Annotations, current.Annotations)
 	current.OwnerReferences = desired.OwnerReferences
 	if err := r.Patch(ctx, current, client.MergeFrom(original)); err != nil && !namespaceIsTerminatingError(err) {
 		return err
@@ -219,7 +220,13 @@ func (r *ServiceReconciler) createKudeployDeployment(ctx context.Context, desire
 	current := &kudeployv1alpha1.Deployment{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
+			return err
+		}
+		return nil
+	}
+	if namespaceIsTerminatingError(err) {
+		return nil
 	}
 	return err
 }
@@ -233,7 +240,7 @@ func (r *ServiceReconciler) createOrUpdateStableKubernetesService(ctx context.Co
 	current := &corev1.Service{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil && !namespaceIsTerminatingError(err) {
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
 			return err
 		}
 		return nil
@@ -246,7 +253,8 @@ func (r *ServiceReconciler) createOrUpdateStableKubernetesService(ctx context.Co
 	}
 	original := current.DeepCopy()
 
-	current.Labels = desired.Labels
+	current.Labels = mergeManagedLabels(desired.Labels, current.Labels)
+	current.Annotations = mergeMetadata(desired.Annotations, current.Annotations)
 	current.OwnerReferences = desired.OwnerReferences
 	current.Spec.Ports = desired.Spec.Ports
 	current.Spec.Selector = desired.Spec.Selector

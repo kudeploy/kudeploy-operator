@@ -22,10 +22,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -100,7 +102,10 @@ func (r *DeploymentReconciler) createOrUpdateKubernetesDeployment(ctx context.Co
 	current := &appsv1.Deployment{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) && !namespaceIsTerminatingError(err) {
+			return err
+		}
+		return nil
 	}
 	if err != nil {
 		if namespaceIsTerminatingError(err) {
@@ -109,9 +114,24 @@ func (r *DeploymentReconciler) createOrUpdateKubernetesDeployment(ctx context.Co
 		return err
 	}
 	original := current.DeepCopy()
+
+	desired.Spec.Replicas = current.Spec.Replicas
+	desired.Spec.Selector = current.Spec.Selector
+	desired.Labels = mergeManagedLabels(desired.Labels, current.Labels)
+	desired.Annotations = mergeMetadata(desired.Annotations, current.Annotations)
+	desired.Spec.Template.Labels = mergeManagedLabels(desired.Spec.Template.Labels, current.Spec.Template.Labels)
+	desired.Spec.Template.Annotations = mergeMetadata(desired.Spec.Template.Annotations, current.Spec.Template.Annotations)
+
 	current.Labels = desired.Labels
+	current.Annotations = desired.Annotations
 	current.OwnerReferences = desired.OwnerReferences
 	current.Spec = desired.Spec
+	if equality.Semantic.DeepEqual(current.Labels, original.Labels) &&
+		equality.Semantic.DeepEqual(current.Annotations, original.Annotations) &&
+		equality.Semantic.DeepEqual(current.OwnerReferences, original.OwnerReferences) &&
+		equality.Semantic.DeepEqual(current.Spec, original.Spec) {
+		return nil
+	}
 	if err := r.Patch(ctx, current, client.MergeFrom(original)); err != nil && !namespaceIsTerminatingError(err) {
 		return err
 	}
@@ -164,7 +184,14 @@ func buildKubernetesDeployment(deployment *kudeployv1alpha1.Deployment) *appsv1.
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptrInt32(1),
+			Replicas:             ptrInt32(1),
+			RevisionHistoryLimit: ptrInt32(0),
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: ptrIntOrString(intstr.FromInt32(0)),
+				},
+			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					deploymentLabel: deployment.Name,
@@ -232,6 +259,10 @@ func namespaceIsTerminatingError(err error) bool {
 }
 
 func ptrInt32(value int32) *int32 {
+	return &value
+}
+
+func ptrIntOrString(value intstr.IntOrString) *intstr.IntOrString {
 	return &value
 }
 
