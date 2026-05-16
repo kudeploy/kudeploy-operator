@@ -1,0 +1,5 @@
+apiVersion: kudeploy.com/v1alpha1
+kind: Project
+metadata:
+  name: payment
+spec: {}

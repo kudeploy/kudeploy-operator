@@ -8,4 +8,12 @@ layout:
 - go.kubebuilder.io/v4
 projectName: kudeploy-operator
 repo: github.com/kudeploy/kudeploy-operator
+resources:
+- api:
+    crdVersion: v1
+  controller: true
+  domain: kudeploy.com
+  kind: Project
+  path: github.com/kudeploy/kudeploy-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"
