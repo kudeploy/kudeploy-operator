@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/apis"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -156,8 +158,72 @@ var _ = Describe("BuildRun Controller", func() {
 		Expect(buildRun.Status.ServiceAccountName).To(Equal("buildrun-" + buildRunName))
 		Expect(buildRun.Status.Conditions).To(ContainElement(SatisfyAll(
 			HaveField("Type", "Ready"),
-			HaveField("Status", metav1.ConditionTrue),
+			HaveField("Status", metav1.ConditionUnknown),
 			HaveField("Reason", "PipelineRunCreated"),
+		)))
+	})
+
+	It("marks the BuildRun ready when the PipelineRun succeeds", func() {
+		buildRun := newBuildRun()
+		pipelineRun := buildPipelineRun(buildRun)
+		startTime := metav1.NewTime(time.Date(2026, 5, 23, 1, 2, 3, 0, time.UTC))
+		completionTime := metav1.NewTime(time.Date(2026, 5, 23, 1, 3, 4, 0, time.UTC))
+		pipelineRun.Status.StartTime = &startTime
+		pipelineRun.Status.CompletionTime = &completionTime
+		pipelineRun.Status.SetCondition(&apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionTrue,
+			Reason:  "Succeeded",
+			Message: "Tasks completed.",
+		})
+		reconciler := newReconciler(
+			buildRun,
+			newSecret("git-credentials"),
+			newSecret("image-credentials"),
+			buildServiceAccount(buildRun),
+			pipelineRun,
+		)
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: buildRunKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(reconciler.Get(ctx, buildRunKey, buildRun)).To(Succeed())
+		Expect(buildRun.Status.Conditions).To(ContainElement(SatisfyAll(
+			HaveField("Type", "Ready"),
+			HaveField("Status", metav1.ConditionTrue),
+			HaveField("Reason", "PipelineRunSucceeded"),
+			HaveField("Message", "Tasks completed."),
+		)))
+		Expect(buildRun.Status.StartTime.Time).To(BeTemporally("==", startTime.Time))
+		Expect(buildRun.Status.CompletionTime.Time).To(BeTemporally("==", completionTime.Time))
+	})
+
+	It("marks the BuildRun failed when the PipelineRun fails", func() {
+		buildRun := newBuildRun()
+		pipelineRun := buildPipelineRun(buildRun)
+		pipelineRun.Status.SetCondition(&apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionFalse,
+			Reason:  "Failed",
+			Message: "Step build failed.",
+		})
+		reconciler := newReconciler(
+			buildRun,
+			newSecret("git-credentials"),
+			newSecret("image-credentials"),
+			buildServiceAccount(buildRun),
+			pipelineRun,
+		)
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: buildRunKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(reconciler.Get(ctx, buildRunKey, buildRun)).To(Succeed())
+		Expect(buildRun.Status.Conditions).To(ContainElement(SatisfyAll(
+			HaveField("Type", "Ready"),
+			HaveField("Status", metav1.ConditionFalse),
+			HaveField("Reason", "PipelineRunFailed"),
+			HaveField("Message", "Step build failed."),
 		)))
 	})
 

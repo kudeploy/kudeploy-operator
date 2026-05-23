@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -123,12 +124,11 @@ func (r *BuildRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, r.updateBuildRunStatus(ctx, buildRun, metav1.Condition{
-		Type:    buildRunReady,
-		Status:  metav1.ConditionTrue,
-		Reason:  "PipelineRunCreated",
-		Message: "PipelineRun and ServiceAccount are ready for this BuildRun.",
-	})
+	currentPipelineRun := &tektonv1.PipelineRun{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(pipelineRun), currentPipelineRun); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, r.updateBuildRunStatusFromPipelineRun(ctx, buildRun, currentPipelineRun)
 }
 
 func (r *BuildRunReconciler) reconcileDelete(ctx context.Context, buildRun *kudeployv1alpha1.BuildRun) (ctrl.Result, error) {
@@ -206,6 +206,57 @@ func (r *BuildRunReconciler) updateBuildRunStatus(ctx context.Context, buildRun 
 	buildRun.Status.ServiceAccountName = serviceAccountNameFor(buildRun.Name)
 	meta.SetStatusCondition(&buildRun.Status.Conditions, condition)
 	return ignoreConflict(r.Status().Patch(ctx, buildRun, client.MergeFrom(original)))
+}
+
+func (r *BuildRunReconciler) updateBuildRunStatusFromPipelineRun(ctx context.Context, buildRun *kudeployv1alpha1.BuildRun, pipelineRun *tektonv1.PipelineRun) error {
+	original := buildRun.DeepCopy()
+	buildRun.Status.PipelineRunName = pipelineRun.Name
+	buildRun.Status.ServiceAccountName = serviceAccountNameFor(buildRun.Name)
+	buildRun.Status.StartTime = pipelineRun.Status.StartTime
+	buildRun.Status.CompletionTime = pipelineRun.Status.CompletionTime
+	meta.SetStatusCondition(&buildRun.Status.Conditions, buildRunConditionFromPipelineRun(pipelineRun))
+	return ignoreConflict(r.Status().Patch(ctx, buildRun, client.MergeFrom(original)))
+}
+
+func buildRunConditionFromPipelineRun(pipelineRun *tektonv1.PipelineRun) metav1.Condition {
+	succeeded := pipelineRun.Status.GetCondition(apis.ConditionSucceeded)
+	if succeeded == nil {
+		return metav1.Condition{
+			Type:    buildRunReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "PipelineRunCreated",
+			Message: "PipelineRun was created and is waiting for Tekton status.",
+		}
+	}
+
+	message := succeeded.Message
+	if message == "" {
+		message = "PipelineRun status was reported by Tekton."
+	}
+
+	switch succeeded.Status {
+	case corev1.ConditionTrue:
+		return metav1.Condition{
+			Type:    buildRunReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  "PipelineRunSucceeded",
+			Message: message,
+		}
+	case corev1.ConditionFalse:
+		return metav1.Condition{
+			Type:    buildRunReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "PipelineRunFailed",
+			Message: message,
+		}
+	default:
+		return metav1.Condition{
+			Type:    buildRunReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "PipelineRunRunning",
+			Message: message,
+		}
+	}
 }
 
 func ensureBuildRunMetadata(buildRun *kudeployv1alpha1.BuildRun) bool {

@@ -432,11 +432,6 @@ spec: {}
 			By("waiting for the BuildRun controller to create Tekton resources")
 			waitForJSONPath(
 				"buildruns.kudeploy.com", buildRunE2EName, buildRunE2EProjectName,
-				"{.status.conditions[?(@.type=='Ready')].reason}", "PipelineRunCreated",
-				2*time.Minute,
-			)
-			waitForJSONPath(
-				"buildruns.kudeploy.com", buildRunE2EName, buildRunE2EProjectName,
 				"{.status.pipelineRunName}", buildRunE2EName,
 				2*time.Minute,
 			)

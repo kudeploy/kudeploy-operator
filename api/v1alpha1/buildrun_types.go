@@ -86,6 +86,14 @@ type BuildRunStatus struct {
 	// +optional
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
+	// startTime is the time Tekton reported the PipelineRun started.
+	// +optional
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// completionTime is the time Tekton reported the PipelineRun completed.
+	// +optional
+	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
+
 	// conditions represent the current state of the BuildRun resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//

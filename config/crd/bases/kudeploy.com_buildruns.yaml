@@ -113,6 +113,11 @@ spec:
           status:
             description: status defines the observed state of BuildRun
             properties:
+              completionTime:
+                description: completionTime is the time Tekton reported the PipelineRun
+                  completed.
+                format: date-time
+                type: string
               conditions:
                 description: |-
                   conditions represent the current state of the BuildRun resource.
@@ -189,6 +194,11 @@ spec:
               serviceAccountName:
                 description: serviceAccountName is the dedicated ServiceAccount name
                   used by the PipelineRun.
+                type: string
+              startTime:
+                description: startTime is the time Tekton reported the PipelineRun
+                  started.
+                format: date-time
                 type: string
             type: object
         required:
